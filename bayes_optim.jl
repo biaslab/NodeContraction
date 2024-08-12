@@ -4,10 +4,9 @@ using Flux: train!, onehotbatch
 using ExponentialFamilyProjection
 using ProgressMeter
 
-struct NNFused{E, T, M} <: DiscreteMultivariateDistribution
+struct NNFused{E, T} <: DiscreteMultivariateDistribution
     ε::E
     X::T
-    model::M
 end;
 
 function train_nn(model, loss, ε, n_iter, train_data)
@@ -23,11 +22,17 @@ end
 
 function BayesBase.logpdf(fused_neural_net::NNFused, y::Vector)
 
+    model = Chain(
+        Dense(784, 100, relu),
+        Dense(100, 10, relu),
+        softmax
+    )
+
     loss = (m, x, y) -> Flux.Losses.logitcrossentropy(m(x), y);
     
     y_onehot_train = Flux.onehotbatch(y, 0:9)
-    train_data = [(Flux.flatten(x_train), Flux.flatten(y_onehot_train))];
-    trained_nn = train_nn(fused_neural_net.model, loss, fused_neural_net.ε, 200, train_data)
+    train_data = [(fused_neural_net.X, Flux.flatten(y_onehot_train))];
+    trained_nn = train_nn(model, loss, fused_neural_net.ε, 200, train_data)
 
     ps = trained_nn(train_data[1][1])
 
@@ -45,21 +50,14 @@ x_train, y_train = MNIST(split=:train)[:];
 x_cutted = x_train[:, :, 1:slice_size];
 y_cutted = y_train[1:slice_size];
 
-model_generator = () -> Chain(
-    Dense(784, 100, relu),
-    Dense(100, 10, relu),
-    softmax
-)
+dist = NNFused(1e-5,  Flux.flatten(x_train))
+logpdf(dist, y_train)
 
-dist = NNFused(1e-5, x_train, model_generator())
+@node NNFused Stochastic [ y, ε, X];
 
-# logpdf(dist, y_train)
-
-@node NNFused Stochastic [ y, ε, X, model];
-
-@model function bayes_optim(y, X, model)
+@model function bayes_optim(y, X)
     ε ~ Beta(1, 1)
-    y ~ NNFused(ε, X, model)
+    y ~ NNFused(ε, X)
 end;
 
 @constraints function nn_constraints()
@@ -71,7 +69,7 @@ end;
 end;
 
 result = infer(
-        model = bayes_sir(X = x_train, model = model_generator() ),
+        model = bayes_optim(X = Flux.flatten(x_train)),
         data  = (y = y_train, ),
         constraints = nn_constraints(),
         showprogress = false,
