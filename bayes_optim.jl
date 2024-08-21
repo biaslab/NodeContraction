@@ -13,11 +13,10 @@ struct NNFused{E,T} <: DiscreteMultivariateDistribution
     X::T
 end;
 
-function train_nn(model, ε, n_iter, train_data)
+function train_nn(model, ε, n_iter, train_data, pl_min_dist=0.01)
     optim = Flux.setup(Flux.ADAM(ε), model)
     f = (accuracy) -> -accuracy
-    pl = Flux.plateau(f, 5; min_dist=0.01)
-    es = Flux.early_stopping(f, 4)
+    pl = Flux.plateau(f, 5; min_dist=pl_min_dist)
     @showprogress for j in 1:n_iter
         for (i, datapoint) in enumerate(train_data)
             input, labels = datapoint
@@ -46,9 +45,11 @@ end
 
 function BayesBase.logpdf(fused_neural_net::NNFused, y::AbstractMatrix{<:Real})
     model = Chain(
-        Dense(784, 100, relu),
+        Dense(784, 256, relu),
         Dropout(0.45),
-        Dense(100, 10, relu),
+        Dense(256, 256, relu),
+        Dropout(0.45),
+        Dense(256, 10, relu),
         softmax
     )
     train_data = Flux.DataLoader((fused_neural_net.X, y), shuffle=true, batchsize=128)
@@ -62,7 +63,7 @@ function BayesBase.logpdf(fused_neural_net::NNFused, y::AbstractMatrix{<:Real})
     return sumlpdf
 end;
 
-slice_size = 1500
+slice_size = 3000
 # Load training data (images, labels)
 x_train, y_train = MNIST(split=:train)[:];
 x_test, y_test = MNIST(split=:test)[:];
@@ -90,6 +91,7 @@ end
 global result
 data = Dict()
 resulting_lrs = Dict()
+accuracies = Dict()
 for dist in [Exponential, Gamma, InverseGamma]
 
     buf = IOBuffer()
@@ -97,8 +99,8 @@ for dist in [Exponential, Gamma, InverseGamma]
 
     @constraints function nn_constraints()
         parameters = ProjectionParameters(
-            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=3),
-            niterations=3,
+            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=2),
+            niterations=2,
         )
         q(ε)::ProjectedTo(dist; parameters=parameters, extra=(debug=debug,))
     end
@@ -126,4 +128,22 @@ for dist in [Exponential, Gamma, InverseGamma]
     s = String(take!(buf))
     data[dist] = parse.(Float64, getindex.(split.(split(s, "\n"), " ")[1:(end-1)], 2))
     resulting_lrs[dist] = result.posteriors[:ε]
+    if dist == Exponential || dist == Gamma
+        effective_lr = mean(resulting_lrs[dist])
+    else
+        effective_lr = median(resulting_lrs[dist])
+    end
+    model = Chain(
+        Dense(784, 256, relu),
+        Dropout(0.45),
+        Dense(256, 256, relu),
+        Dropout(0.45),
+        Dense(256, 10, relu),
+        softmax
+    )
+    train_data = Flux.DataLoader((Flux.flatten(x_train), Flux.onehotbatch(y_train, 0:9)), shuffle=true, batchsize=128)
+    trained_nn = train_nn(model, effective_lr, 100, train_data, 0.01)
+    ps = trained_nn(x_test)
+    accuracy = mean(Flux.onecold(ps) .== y_test .+ 1)
+    accuracies[dist] = accuracy
 end
