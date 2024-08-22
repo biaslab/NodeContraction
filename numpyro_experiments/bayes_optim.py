@@ -16,16 +16,7 @@ import optax
 class CNN(nn.Module):
     @nn.compact
     def __call__(self, x):
-        x = x.reshape((x.shape[0], 28, 28, 1))
-        x = nn.Conv(features=32, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
-        x = nn.Conv(features=64, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
-        x = x.reshape((x.shape[0], -1))
-        x = nn.Dense(features=256)(x)
-        x = nn.relu(x)
+        x = x.reshape(x.shape[0], 28*28)
         x = nn.Dense(features=10)(x)
         return x
 
@@ -76,6 +67,14 @@ print("Start Loading Mnist")
 train_images = train_images.astype(np.float32) / 255.
 test_images = test_images.astype(np.float32) / 255.
 
+def run_svi(model, images, labels):
+    guide = autoguide.AutoDelta(model)
+    optimizer = numpyro.optim.Adam(0.001)
+    svi = SVI(model, guide, optimizer, Trace_ELBO())
+    svi_results = svi.run(jax.random.PRNGKey(0), 2, images=images, labels=labels)
+    params = svi_results.params
+
+    return params, guide
 
 if __name__ == "__main__":
     # Subset of data for faster computation
@@ -109,13 +108,4 @@ if __name__ == "__main__":
     print(f"Min log probability: {jnp.min(log_probs):.4f}")
     print(f"Max log probability: {jnp.max(log_probs):.4f}")
 
-    # Run inference with NUTS
-    rng_key = jax.random.PRNGKey(0)
-    # kernel = NUTS(model)
-    kernel = HMC(model)
-    mcmc = MCMC(kernel, num_warmup=2, num_samples=2, progress_bar=True)
-    print("inference started")
-    mcmc.run(rng_key, images=train_images_subset, labels=train_labels_subset)
-    samples = mcmc.get_samples()
-
-    print(samples)
+    run_svi(model, train_images_subset, train_labels_subset)
