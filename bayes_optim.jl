@@ -13,7 +13,7 @@ struct NNFused{E,T} <: DiscreteMultivariateDistribution
     X::T
 end;
 
-function train_nn(model, ε, n_iter, train_data, pl_min_dist=0.01)
+function train_nn(model, ε, n_iter, train_data, val_data, pl_min_dist=0.01)
     optim = Flux.setup(Flux.ADAM(ε), model)
     f = (accuracy) -> -accuracy
     pl = Flux.plateau(f, 5; min_dist=pl_min_dist)
@@ -34,7 +34,7 @@ function train_nn(model, ε, n_iter, train_data, pl_min_dist=0.01)
             Flux.update!(optim, model, grads[1])
 
         end
-        accuracy = mean(Flux.onecold(model(train_data.data[1])) .== Flux.onecold(train_data.data[2]))
+        accuracy = mean(Flux.onecold(model(val_data.data[1])) .== Flux.onecold(val_data.data[2]))
         if j > 10 && accuracy < 0.75
             break
         end
@@ -53,26 +53,31 @@ function BayesBase.logpdf(fused_neural_net::NNFused, y::AbstractMatrix{<:Real})
         softmax
     )
     train_data = Flux.DataLoader((fused_neural_net.X, y), shuffle=true, batchsize=128)
-    trained_nn = train_nn(model, fused_neural_net.ε, 100, train_data)
+    trained_nn = train_nn(model, fused_neural_net.ε, 100, train_data, train_data)
     ps = trained_nn(fused_neural_net.X)
 
     sumlpdf = mean(zip(eachcol(y), eachcol(ps))) do (sy, p)
-        return clamp(logpdf(Categorical(p[1:10]), argmax(sy)), -1.0f3, 1.0f3,)
+        return clamp(logpdf(Categorical(p[1:10]), argmax(sy)), -1.5f1, 1.0f3,)
     end
 
     return sumlpdf
 end;
 
-slice_size = 3000
+slice_size = 1500
 # Load training data (images, labels)
 x_train, y_train = MNIST(split=:train)[:];
 x_test, y_test = MNIST(split=:test)[:];
 x_test = Flux.flatten(x_test)
+x_val = x_test[:, 1:1000]
+y_val = y_test[1:1000]
+x_test = x_test[:, 1001:end]
+y_test = y_test[1001:end]
+
 # cutted
 x_cutted = x_train[:, :, 1:slice_size];
 y_cutted = y_train[1:slice_size];
 
-dist = NNFused(1.0f-3, Flux.flatten(x_cutted))
+dist = NNFused(1.0f-10, Flux.flatten(x_cutted))
 logpdf(dist, Flux.onehotbatch(y_cutted, 0:9),)
 
 @node NNFused Stochastic [y, ε, X];
@@ -99,8 +104,8 @@ for dist in [Exponential, Gamma, InverseGamma]
 
     @constraints function nn_constraints()
         parameters = ProjectionParameters(
-            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=2),
-            niterations=2,
+            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=20),
+            niterations=50,
         )
         q(ε)::ProjectedTo(dist; parameters=parameters, extra=(debug=debug,))
     end
@@ -142,8 +147,15 @@ for dist in [Exponential, Gamma, InverseGamma]
         softmax
     )
     train_data = Flux.DataLoader((Flux.flatten(x_train), Flux.onehotbatch(y_train, 0:9)), shuffle=true, batchsize=128)
-    trained_nn = train_nn(model, effective_lr, 100, train_data, 0.01)
+    val_data = Flux.DataLoader((x_val, Flux.onehotbatch(y_val, 0:9)), shuffle=true, batchsize=128)
+    trained_nn = train_nn(model, effective_lr, 100, train_data, val_data, 0.01)
     ps = trained_nn(x_test)
     accuracy = mean(Flux.onecold(ps) .== y_test .+ 1)
     accuracies[dist] = accuracy
 end
+moving_average(vs, n) = [sum(@view vs[i:(i+n-1)]) / n for i in 1:(length(vs)-(n-1))]
+moving_average(data[Gamma], 10)
+
+p = plot(0:10:1000, data[Exponential], label="Exponential", yaxis=:log, xlabel="Number of Neural Networks trained", ylabel="Variational Free Energy")
+plot!(0:10:910, moving_average(data[Gamma], 10), label="Gamma")
+plot!(0:10:910, moving_average(data[InverseGamma], 10), label="InverseGamma")
