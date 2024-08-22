@@ -63,7 +63,7 @@ function BayesBase.logpdf(fused_neural_net::NNFused, y::AbstractMatrix{<:Real})
     return sumlpdf
 end;
 
-slice_size = 1500
+slice_size = 3000
 # Load training data (images, labels)
 x_train, y_train = MNIST(split=:train)[:];
 x_test, y_test = MNIST(split=:test)[:];
@@ -104,8 +104,8 @@ for dist in [Exponential, Gamma, InverseGamma]
 
     @constraints function nn_constraints()
         parameters = ProjectionParameters(
-            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=20),
-            niterations=50,
+            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=30),
+            niterations=100,
         )
         q(ε)::ProjectedTo(dist; parameters=parameters, extra=(debug=debug,))
     end
@@ -154,8 +154,8 @@ for dist in [Exponential, Gamma, InverseGamma]
     accuracies[dist] = accuracy
 end
 moving_average(vs, n) = [sum(@view vs[i:(i+n-1)]) / n for i in 1:(length(vs)-(n-1))]
-moving_average(data[Gamma], 10)
+moving_average(data[Gamma], 5)
 
-p = plot(0:10:1000, data[Exponential], label="Exponential", yaxis=:log, xlabel="Number of Neural Networks trained", ylabel="Variational Free Energy")
-plot!(0:10:910, moving_average(data[Gamma], 10), label="Gamma")
-plot!(0:10:910, moving_average(data[InverseGamma], 10), label="InverseGamma")
+p = plot(0:30:3000, data[Exponential], label="Exponential", yaxis=:log, xlabel="Number of Neural Networks trained", ylabel="Variational Free Energy")
+plot!(p, 0:30:2900, moving_average(data[Gamma], 5), label="Gamma")
+plot!(p, 0:30:2900, moving_average(data[InverseGamma], 5), label="InverseGamma")
