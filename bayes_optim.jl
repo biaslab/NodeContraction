@@ -1,3 +1,5 @@
+using Pkg
+Pkg.activate(".")
 using RxInfer
 using Flux, MLDatasets
 using Flux: train!, onehotbatch
@@ -7,6 +9,9 @@ using ExponentialFamilyProjection.Manopt
 using ProgressMeter
 using DataStructures
 using RecursiveArrayTools
+using JSON
+using Plots
+pgfplotsx()
 
 struct NNFused{E,T} <: DiscreteMultivariateDistribution
     ε::E
@@ -16,7 +21,7 @@ end;
 function train_nn(model, ε, n_iter, train_data, val_data, pl_min_dist=0.01)
     optim = Flux.setup(Flux.ADAM(ε), model)
     f = (accuracy) -> -accuracy
-    pl = Flux.plateau(f, 5; min_dist=pl_min_dist)
+    # pl = Flux.plateau(f, 5; min_dist=pl_min_dist)
     @showprogress for j in 1:n_iter
         for (i, datapoint) in enumerate(train_data)
             input, labels = datapoint
@@ -34,11 +39,11 @@ function train_nn(model, ε, n_iter, train_data, val_data, pl_min_dist=0.01)
             Flux.update!(optim, model, grads[1])
 
         end
-        accuracy = mean(Flux.onecold(model(val_data.data[1])) .== Flux.onecold(val_data.data[2]))
-        if j > 10 && accuracy < 0.75
-            break
-        end
-        pl(accuracy) && break
+        # accuracy = mean(Flux.onecold(model(val_data.data[1])) .== Flux.onecold(val_data.data[2]))
+        # if j > 10 && accuracy < 0.75
+        #     break
+        # end
+        # pl(accuracy) && break
     end
     return model
 end
@@ -53,10 +58,10 @@ function BayesBase.logpdf(fused_neural_net::NNFused, y::AbstractMatrix{<:Real})
         softmax
     )
     train_data = Flux.DataLoader((fused_neural_net.X, y), shuffle=true, batchsize=128)
-    trained_nn = train_nn(model, fused_neural_net.ε, 100, train_data, train_data)
-    ps = trained_nn(fused_neural_net.X)
+    trained_nn = train_nn(model, fused_neural_net.ε, 20, train_data, train_data)
+    ps = trained_nn(x_val_flat)
 
-    sumlpdf = mean(zip(eachcol(y), eachcol(ps))) do (sy, p)
+    sumlpdf = mean(zip(eachcol(y_val_flat), eachcol(ps))) do (sy, p)
         return clamp(logpdf(Categorical(p[1:10]), argmax(sy)), -1.5f1, 1.0f3,)
     end
 
@@ -69,16 +74,15 @@ x_train, y_train = MNIST(split=:train)[:];
 x_test, y_test = MNIST(split=:test)[:];
 x_test = Flux.flatten(x_test)
 x_val = x_test[:, 1:1000]
+x_val_flat = Flux.flatten(x_val)
 y_val = y_test[1:1000]
+y_val_flat = Flux.onehotbatch(y_val, 0:9)
 x_test = x_test[:, 1001:end]
 y_test = y_test[1001:end]
 
 # cutted
 x_cutted = x_train[:, :, 1:slice_size];
 y_cutted = y_train[1:slice_size];
-
-dist = NNFused(1.0f-10, Flux.flatten(x_cutted))
-logpdf(dist, Flux.onehotbatch(y_cutted, 0:9),)
 
 @node NNFused Stochastic [y, ε, X];
 
@@ -93,26 +97,28 @@ logpdf(dist, Flux.onehotbatch(y_cutted, 0:9),)
     end
     y ~ NNFused(ε, X)
 end
-global result
 data = Dict()
 resulting_lrs = Dict()
 accuracies = Dict()
+global record
 for dist in [Exponential, Gamma, InverseGamma]
-
-    buf = IOBuffer()
-    debug = [DebugCost(io=buf), DebugDivider("\n"; io=buf)]
+    if dist == Exponential
+        global record = [RecordEntry(ArrayPartition{Float64,Tuple{Vector{Float64}}}, :p), RecordCost()]
+    else
+        global record = [RecordEntry(ArrayPartition{Float64,Tuple{Vector{Float64},Vector{Float64}}}, :p), RecordCost()]
+    end
 
     @constraints function nn_constraints()
         parameters = ProjectionParameters(
-            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=30),
-            niterations=100,
+            strategy=ExponentialFamilyProjection.ControlVariateStrategy(nsamples=2),
+            niterations=2,
         )
-        q(ε)::ProjectedTo(dist; parameters=parameters, extra=(debug=debug,))
+        q(ε)::ProjectedTo(dist; parameters=parameters, kwargs=(record=record,))
     end
 
     function ExponentialFamilyProjection.getinitialpoint(::ExponentialFamilyProjection.ControlVariateStrategy, M::ExponentialFamilyProjection.AbstractManifold, parameters::ProjectionParameters)
         if dist == Exponential
-            return [-300.0]
+            return ArrayPartition([-300.0])
         elseif dist == Gamma
             return ArrayPartition([0.0], [-300.0])
         elseif dist == InverseGamma
@@ -130,32 +136,34 @@ for dist in [Exponential, Gamma, InverseGamma]
             rulefallback=NodeFunctionRuleFallback(),
         )
     )
-    s = String(take!(buf))
-    data[dist] = parse.(Float64, getindex.(split.(split(s, "\n"), " ")[1:(end-1)], 2))
-    resulting_lrs[dist] = result.posteriors[:ε]
-    if dist == Exponential || dist == Gamma
-        effective_lr = mean(resulting_lrs[dist])
-    else
-        effective_lr = median(resulting_lrs[dist])
-    end
-    model = Chain(
-        Dense(784, 256, relu),
-        Dropout(0.45),
-        Dense(256, 256, relu),
-        Dropout(0.45),
-        Dense(256, 10, relu),
-        softmax
-    )
-    train_data = Flux.DataLoader((Flux.flatten(x_train), Flux.onehotbatch(y_train, 0:9)), shuffle=true, batchsize=128)
-    val_data = Flux.DataLoader((x_val, Flux.onehotbatch(y_val, 0:9)), shuffle=true, batchsize=128)
-    trained_nn = train_nn(model, effective_lr, 100, train_data, val_data, 0.01)
-    ps = trained_nn(x_test)
-    accuracy = mean(Flux.onecold(ps) .== y_test .+ 1)
-    accuracies[dist] = accuracy
+    distributions = ExponentialFamilyDistribution.(dist, record[1].recorded_values)
+    distributions = convert.(dist, distributions)
+    data[dist] = [distributions, record[2].recorded_values]
 end
-moving_average(vs, n) = [sum(@view vs[i:(i+n-1)]) / n for i in 1:(length(vs)-(n-1))]
-moving_average(data[Gamma], 5)
+open("rxinfer_results.json", "w") do f
+    JSON.print(f, data)
+end
 
-p = plot(0:30:3000, data[Exponential], label="Exponential", yaxis=:log, xlabel="Number of Neural Networks trained", ylabel="Variational Free Energy")
-plot!(p, 0:30:2900, moving_average(data[Gamma], 5), label="Gamma")
-plot!(p, 0:30:2900, moving_average(data[InverseGamma], 5), label="InverseGamma")
+moving_average(vs, n) = [sum(@view vs[i:(i+n-1)]) / n for i in 1:(length(vs)-(n-1))]
+stopping_threshold = 0.05
+
+for dist in [Exponential, Gamma, InverseGamma]
+    index = findfirst(x -> abs(x) < stopping_threshold, data[dist][2])
+    if isnothing(index)
+        index = length(data[dist][2])
+    end
+    resulting_lrs[dist] = data[dist][1][index]
+end
+
+open("rxinfer_results_lrs.json", "w") do f
+    JSON.print(f, [[rand(resulting_lr, 50) for (_, resulting_lr) in resulting_lrs], Dict(name => mean(resulting_lr) for (name, resulting_lr) in resulting_lrs)])
+end
+
+@show resulting_lrs
+@show [(name, mean(resulting_lr)) for (name, resulting_lr) in resulting_lrs]
+@show [(name, median(resulting_lr)) for (name, resulting_lr) in resulting_lrs]
+
+p = plot(270:30:3000, moving_average(data[Exponential][2], 10), yaxis=:log, label="Exponential", xlabel="Number of Neural Networks trained", ylabel="Variational Free Energy")
+plot!(p, 270:30:3000, moving_average(data[Gamma][2], 10), label="Gamma")
+plot!(p, 270:30:3000, moving_average(data[InverseGamma][2], 10), label="Inverse Gamma")
+savefig(p, "rxinfer_results.tikz")

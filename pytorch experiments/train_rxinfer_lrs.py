@@ -21,8 +21,6 @@ training_data = datasets.MNIST(
     transform=ToTensor()
 )
 
-training_data = torch.utils.data.Subset(training_data, range(3000))
-
 test_data = datasets.MNIST(
     root="pytorch experiments/data",
     train=False,
@@ -37,8 +35,6 @@ validation_dataloader = DataLoader(validation_data, batch_size=128)
 test_dataloader = DataLoader(test_data, batch_size=128)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-loss_values = []
 
 class NeuralNetwork(nn.Module):
     def __init__(self):
@@ -57,19 +53,12 @@ class NeuralNetwork(nn.Module):
         logits = self.linear_relu_stack(x)
         return logits
     
-def run_model(learning_rate):
-    # initialize model
-    model = NeuralNetwork()
-    model.to(device)
-
-
-    # your training here
-    # define the loss function and the optimizer
+def train_model(model, lr):
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     # train the model
-    for t in range(20):
+    for t in tqdm(range(20)):
         for images, labels in train_dataloader:
             images, labels = images.to(device), labels.to(device)
             # Forward pass
@@ -79,57 +68,57 @@ def run_model(learning_rate):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+    return model
+
+def run_model(learning_rate):
+    # initialize model
+    model = NeuralNetwork()
+    model.to(device)
+
+
+    # your training here
+    # define the loss function and the optimizer
+    train_model(model, learning_rate)
     # compute test accuracy
     with torch.no_grad():
-        test_loss = 0
         test_accuracy = 0
-        for images, labels in validation_dataloader:
+        for images, labels in tqdm(test_dataloader):
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            test_loss += loss_fn(outputs, labels)
-            test_accuracy += (outputs.argmax(1) == labels).float().mean()
-        test_loss /= len(test_dataloader)
+            test_accuracy += (outputs.argmax(1) == labels).float().mean().item()
         test_accuracy /= len(test_dataloader)
-        # print(test_accuracy)
-    # print(f"Test Error: \n Accuracy: {(100*test_accuracy):>0.1f}%, Avg loss: {test_loss:>8f} \n")
-    loss_values.append(test_loss.item())
-    return -test_loss.item()
-losses = {}
-params = {}
-for kernel in [RBF(), Matern(1), Matern(2.5)]:
-    loss_values = [] 
-    pbounds = {'learning_rate': (1e-7, 1)}
-    optimizer = BayesianOptimization(
-        f=run_model,
-        pbounds=pbounds,
-        verbose=2, # verbose = 1 prints only when a maximum is observed, verbose = 0 is silent
-        random_state=1,
-    )
-    optimizer.set_gp_params(kernel=kernel)
-
-    optimizer.maximize(
-        init_points=2,
-        n_iter=3000,
-    )
-    losses[str(kernel)] = copy.deepcopy(loss_values)
-    params[str(kernel)] = float(optimizer.max['params']['learning_rate'])
-
-
-
-import numpy as np
-from hyperopt import hp, tpe, fmin
-loss_values = []
-# Single line bayesian optimization of polynomial function
-best = fmin(fn=lambda x: -run_model(x),
-            space=hp.lognormal('x', -5, 3.0),
-            algo=tpe.suggest, 
-            max_evals=3000)
-
-losses['TPE'] = copy.deepcopy(loss_values)
-params['TPE'] = best["x"]
+    return test_accuracy
 
 import json
 
-with open('bayesopt_results.json', 'w') as f:
-    json.dump({'losses': losses, 'params': params}, f)
-    
+with open("rxinfer_results_lrs.json", "r") as file:
+    lrs = json.load(file)
+
+with open("rxinfer_results.json", "r") as file:
+    results = json.load(file)
+
+for distribution, learned_lrs in lrs[1].items():
+    print(distribution)
+    print(run_model(learned_lrs))
+
+
+def run_ensemble(lrs):
+    models = []
+    for lr in lrs:
+        model = NeuralNetwork()
+        model.to(device)
+        model = train_model(model, lr)
+        models.append(model)
+    with torch.no_grad():
+        # run voting ensemble over trained models
+        test_accuracy = 0
+        for images, labels in tqdm(test_dataloader):
+            images, labels = images.to(device), labels.to(device)
+            outputs = torch.stack([model(images) for model in models])
+            outputs = outputs.mean(0)
+            test_accuracy += (outputs.argmax(1) == labels).float().mean().item()
+        test_accuracy /= len(test_dataloader)
+    return test_accuracy
+
+for parameters in lrs[0]:
+    print(run_ensemble(parameters))
