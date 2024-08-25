@@ -2,6 +2,7 @@ import torch
 import hyperopt
 
 import os
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -57,7 +58,7 @@ class NeuralNetwork(nn.Module):
         logits = self.linear_relu_stack(x)
         return logits
     
-def run_model(learning_rate):
+def run_model(learning_rate, exp=True):
     # initialize model
     model = NeuralNetwork()
     model.to(device)
@@ -66,7 +67,8 @@ def run_model(learning_rate):
     # your training here
     # define the loss function and the optimizer
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    lr = np.exp(learning_rate) if exp else learning_rate
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     # train the model
     for t in range(20):
@@ -98,7 +100,7 @@ losses = {}
 params = {}
 for kernel in [RBF(), Matern(1), Matern(2.5)]:
     loss_values = [] 
-    pbounds = {'learning_rate': (1e-7, 1)}
+    pbounds = {'learning_rate': (-7, 0)}
     optimizer = BayesianOptimization(
         f=run_model,
         pbounds=pbounds,
@@ -109,18 +111,17 @@ for kernel in [RBF(), Matern(1), Matern(2.5)]:
 
     optimizer.maximize(
         init_points=2,
-        n_iter=3000,
+        n_iter=1000,
     )
     losses[str(kernel)] = copy.deepcopy(loss_values)
     params[str(kernel)] = float(optimizer.max['params']['learning_rate'])
 
 
 
-import numpy as np
 from hyperopt import hp, tpe, fmin
 loss_values = []
 # Single line bayesian optimization of polynomial function
-best = fmin(fn=lambda x: -run_model(x),
+best = fmin(fn=lambda x: -run_model(x, exp=False),
             space=hp.lognormal('x', -5, 3.0),
             algo=tpe.suggest, 
             max_evals=3000)
