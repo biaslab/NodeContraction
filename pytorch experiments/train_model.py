@@ -112,7 +112,7 @@ for kernel in [RBF(), Matern(1), Matern(2.5)]:
 
     optimizer.maximize(
         init_points=2,
-        n_iter=3,
+        n_iter=1000,
     )
     losses[str(kernel)] = copy.deepcopy(loss_values)
     params[str(kernel)] = float(optimizer.max['params']['learning_rate'])
