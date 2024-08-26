@@ -98,6 +98,7 @@ def run_model(learning_rate, exp=True):
     return -test_loss.item()
 losses = {}
 params = {}
+distributions = {}
 for kernel in [RBF(), Matern(1), Matern(2.5)]:
     loss_values = [] 
     pbounds = {'learning_rate': (-7, 0)}
@@ -111,10 +112,12 @@ for kernel in [RBF(), Matern(1), Matern(2.5)]:
 
     optimizer.maximize(
         init_points=2,
-        n_iter=1000,
+        n_iter=3,
     )
     losses[str(kernel)] = copy.deepcopy(loss_values)
     params[str(kernel)] = float(optimizer.max['params']['learning_rate'])
+    mu, sigma = optimizer._gp.predict([[params[str(kernel)]]], return_std=True)
+    distributions[str(kernel)] = (mu.item(), sigma.item())
 
 
 
@@ -132,5 +135,5 @@ params['TPE'] = best["x"]
 import json
 
 with open('bayesopt_results.json', 'w') as f:
-    json.dump({'losses': losses, 'params': params}, f)
+    json.dump({'losses': losses, 'params': params, 'distributions': distributions}, f)
     
