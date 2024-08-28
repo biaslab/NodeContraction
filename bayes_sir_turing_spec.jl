@@ -2,13 +2,6 @@ using Distributions
 using Turing
 using OrdinaryDiffEq
 
-function simulate_data(l, i₀, β)
-    prob = ODEProblem(sir_ode!, [990.0, 10.0, 0.0, 0.0], (0.0, l), [β, 10.0, 0.25])
-    X = sir_ode_solve(prob, l, i₀, β)
-    Y = rand.(Poisson.(X))
-    return X, Y
-end;
-
 function sir_ode_solve(problem, l, i₀, β)
     I = i₀*1000.0
     S = 1000.0 - I
@@ -23,6 +16,17 @@ function sir_ode_solve(problem, l, i₀, β)
     end
     return sol_X
 end;
+
+function simulate_data(l, i₀, β)
+    prob = ODEProblem(sir_ode!, [990.0, 10.0, 0.0, 0.0], (0.0, l), [β, 10.0, 0.25])
+    X = sir_ode_solve(prob, l, i₀, β)
+    Y = rand.(Poisson.(X))
+    return X, Y
+end;
+
+mutable struct SirOdeSolver!
+    counter::Int
+end 
 
 function sir_ode!(du,u,p,t)
     (S,I,R,C) = u
@@ -39,8 +43,12 @@ function sir_ode!(du,u,p,t)
     nothing
 end;
 
+function (solver::SirOdeSolver!)(du,u,p,t)
+    solver.counter += 1
+    sir_ode!(du,u,p,t)
+end
 
-@model function bayes_sir(y)
+Turing.@model function bayes_sir(y, solver)
     # Calculate number of timepoints
     l = length(y)
     i₀  ~ Uniform(0.0,1.0)
@@ -49,7 +57,7 @@ end;
     u0=[1000.0-I,I,0.0,0.0]
     p=[β,10.0,0.25]
     tspan = (0.0,float(l))
-    prob = ODEProblem(sir_ode!,
+    prob = ODEProblem(solver,
             u0,
             tspan,
             p)

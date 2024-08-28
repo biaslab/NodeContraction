@@ -27,46 +27,44 @@ X = C[2:end] - C[1:(end-1)];
 Random.seed!(1234)
 Y = rand.(Poisson.(X));
 
-n_samples = 10000
+calls = []
+for n_samples in [2, 10, 100, 900, 1000, 10000]
+    solver! = SirOdeSolver!(0)
+    ode_nuts = sample(bayes_sir(Y, solver!), NUTS(0.65), n_samples, verbose=false, progress=false);
+    posterior = DataFrame(ode_nuts);
+    append!(calls, solver!.counter)
+end 
 
-ode_nuts = sample(bayes_sir(Y), NUTS(0.65), n_samples, verbose=false, progress=false);
-posterior = DataFrame(ode_nuts);
+function run_nuts_cred_intervals(n_samples)
 
-begin
-    histogram2d(posterior[!,:β],posterior[!,:i₀],
-                    bins=80,
-                    xlabel="β",
-                    ylab="i₀",
-                    ylim=[0.006,0.016],
-                    xlim=[0.045,0.055],
-                    legend=false)
-    plot!([0.05,0.05],[0.0,0.01])
-    plot!([0.0,0.05],[0.01,0.01])
+    nsims = 100
+    i₀_true = 0.01
+    β_true = 0.05
+    l = 40
+    i₀_mean = Array{Float64}(undef, nsims)
+    β_mean = Array{Float64}(undef, nsims)
+    i₀_coverage = Array{Float64}(undef, nsims)
+    β_coverage = Array{Float64}(undef, nsims)
+    number_of_odes_solver = Array{Int}(undef, nsims)
+
+    @showprogress for i in 1:nsims
+        X_sim, Y_sim = simulate_data(l, i₀_true, β_true)
+        solver! = SirOdeSolver!(0)
+        r = sample(bayes_sir(Y_sim, solver!), NUTS(0.65), n_samples, verbose=false, progress=false)
+        i₀_mean[i] = mean(r[:i₀])
+        i0_cov = sum(r[:i₀] .<= i₀_true) / length(r[:i₀])
+        β_mean[i] = mean(r[:β])
+        b_cov = sum(r[:β] .<= β_true) / length(r[:β])
+        i₀_coverage[i] = i0_cov
+        β_coverage[i] = b_cov
+        number_of_odes_solver[i] = solver!.counter
+    end;
+
+    return mean(i₀_coverage), mean(β_coverage), mean(number_of_odes_solver)
 end
-
-nsims = 100
-i₀_true = 0.01
-β_true = 0.05
-l = 40
-i₀_mean = Array{Float64}(undef, nsims)
-β_mean = Array{Float64}(undef, nsims)
-i₀_coverage = Array{Float64}(undef, nsims)
-β_coverage = Array{Float64}(undef, nsims)
-
-@showprogress for i in 1:nsims
-    X_sim, Y_sim = simulate_data(l, i₀_true, β_true)
-    r = sample(bayes_sir(Y_sim), NUTS(0.65), 10000, verbose=false, progress=false)
-    i₀_mean[i] = mean(r[:i₀])
-    i0_cov = sum(r[:i₀] .<= i₀_true) / length(r[:i₀])
-    β_mean[i] = mean(r[:β])
-    b_cov = sum(r[:β] .<= β_true) / length(r[:β])
-    i₀_coverage[i] = i0_cov
-    β_coverage[i] = b_cov
-end;
-
-# pl_β_coverage = histogram(β_coverage, bins=0:0.1:1.0, label=false, title="β", ylabel="Density", density=true, xrotation=45, xlim=(0.0,1.0))
-# pl_i₀_coverage = histogram(i₀_coverage, bins=0:0.1:1.0, label=false, title="i₀", ylabel="Density", density=true, xrotation=45, xlim=(0.0,1.0))
-# plot(pl_β_coverage, pl_i₀_coverage, layout=(1,2), plot_title="Distribution of CDF of true value")
-
-sum(in_credible_interval.(β_coverage)) / nsims
-sum(in_credible_interval.(i₀_coverage)) / nsims
+Random.seed!(1234)
+run_nuts_cred_intervals(10)
+Random.seed!(1234)
+run_nuts_cred_intervals(100)
+Random.seed!(1234)
+run_nuts_cred_intervals(900)
