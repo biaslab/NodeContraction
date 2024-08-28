@@ -24,7 +24,7 @@ culp = ContinuousUnivariateLogPdf(UnspecifiedDomain(), (e) -> logpdf(dist, e, y)
 right = Gamma(1.0, 1 / 300.0)
 
 # Open a file for writing
-open("output.txt", "w") do file
+open("approx_mean_cov.txt", "w") do file
     for i in 3:1000
         m, v = ReactiveMP.approximate_meancov(ghcubature(i), x->pdf(culp,x), right)
         # Write i, m, and v to the file
@@ -33,4 +33,4 @@ open("output.txt", "w") do file
     end
 end
 
-println("Results have been written to output.txt")
+println("Results have been written to approx_mean_cov.txt")
