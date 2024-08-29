@@ -76,3 +76,40 @@ end;
 function in_credible_interval(x, lwr=0.025, upr=0.975)
     return x >= lwr && x <= upr
 end;
+
+function run_ode_experiment(i₀_true, β_true, sampler, nsamples)
+    nsims = 100
+    
+    Random.seed!(1234)
+    seeds = map(abs, rand(Int, nsims))
+
+    l = 40
+    i₀_mean = Array{Float64}(undef, nsims)
+    β_mean = Array{Float64}(undef, nsims)
+    i₀_coverage = Array{Float64}(undef, nsims)
+    β_coverage = Array{Float64}(undef, nsims)
+    i₀_mse = Array{Float64}(undef, nsims)
+    β_mse = Array{Float64}(undef, nsims)
+    number_of_odes_solver = Array{Int}(undef, nsims)
+
+    for i in 1:nsims
+        Random.seed!(seeds[i])
+        _, Y_sim = simulate_data(l, i₀_true, β_true)
+        solver! = SirOdeSolver!(0)
+        r = sample(bayes_sir(Y_sim, solver!), sampler, nsamples, verbose=false, progress=false)
+        i₀_mean[i] = mean(r[:i₀])
+        i0_cov = sum(r[:i₀] .<= i₀_true) / length(r[:i₀])
+        β_mean[i] = mean(r[:β])
+        b_cov = sum(r[:β] .<= β_true) / length(r[:β])
+        i₀_coverage[i] = i0_cov
+        β_coverage[i] = b_cov
+        number_of_odes_solver[i] = solver!.counter
+        i₀_mse[i] = (i₀_mean[i] - i₀_true)^2
+        β_mse[i] = (β_mean[i] - β_true)^2
+    end;
+
+    in_cred_interval_i0 = map(in_credible_interval, i₀_coverage)
+    in_cred_interval_β = map(in_credible_interval, β_coverage)
+
+    return mean(in_cred_interval_i0), mean(in_cred_interval_β), mean(number_of_odes_solver), mean(i₀_mse), mean(β_mse)
+end 
